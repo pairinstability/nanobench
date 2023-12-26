@@ -187,7 +187,7 @@ class BigO;
  *    Apart from these tags, it is also possible to use some mathematical operations on the measurement data. The operations
  *    are of the form `{{command(name)}}`.  Currently `name` can be one of `elapsed`, `iterations`. If performance counters
  *    are available (currently only on current Linux systems), you also have `pagefaults`, `cpucycles`,
- *    `contextswitches`, `instructions`, `branchinstructions`, and `branchmisses`. All the measures (except `iterations`) are
+ *    `contextswitches`, `instructions`, `branchinstructions`, `branchmisses`, `cachemisses`, and `cachereferences`. All the measures (except `iterations`) are
  *    provided for a single iteration (so `elapsed` is the time a single iteration took). The following tags are available:
  *
  *    * `{{median(<name>)}}` Calculate median of a measurement data set, e.g. `{{median(elapsed)}}`.
@@ -241,6 +241,8 @@ class BigO;
  *       * `{{branchinstructions}}` Average number of branches executed per iteration.
  *
  *       * `{{branchmisses}}` Average number of branches that were missed per iteration.
+ *
+ *       * `{{cachemissrate}}` Average cache miss rate (cache misses / cache references) per iteration.
  *
  *    * `{{/measurement}}` Ends the measurement tag.
  *
@@ -378,6 +380,8 @@ struct PerfCountSet {
     T instructions{};
     T branchInstructions{};
     T branchMisses{};
+    T cacheMisses{};
+    T cacheReferences{};
 };
 
 } // namespace detail
@@ -427,6 +431,7 @@ public:
         instructions,
         branchinstructions,
         branchmisses,
+        cachemissrate,
         _size
     };
 
@@ -1373,8 +1378,8 @@ inline Clock::duration clockResolution() noexcept;
 namespace templates {
 
 char const* csv() noexcept {
-    return R"DELIM("title";"name";"unit";"batch";"elapsed";"error %";"instructions";"branches";"branch misses";"total"
-{{#result}}"{{title}}";"{{name}}";"{{unit}}";{{batch}};{{median(elapsed)}};{{medianAbsolutePercentError(elapsed)}};{{median(instructions)}};{{median(branchinstructions)}};{{median(branchmisses)}};{{sumProduct(iterations, elapsed)}}
+    return R"DELIM("title";"name";"unit";"batch";"elapsed";"error %";"instructions";"branches";"branch misses";"cache misses";"total"
+{{#result}}"{{title}}";"{{name}}";"{{unit}}";{{batch}};{{median(elapsed)}};{{medianAbsolutePercentError(elapsed)}};{{median(instructions)}};{{median(branchinstructions)}};{{median(branchmisses)}};{{median(cachemissrate)}};{{sumProduct(iterations, elapsed)}}
 {{/result}})DELIM";
 }
 
@@ -1456,6 +1461,7 @@ char const* json() noexcept {
             "median(pagefaults)": {{median(pagefaults)}},
             "median(branchinstructions)": {{median(branchinstructions)}},
             "median(branchmisses)": {{median(branchmisses)}},
+            "median(cachemissrate)": {{median(cachemissrate)}},
             "totalTime": {{sumProduct(iterations, elapsed)}},
             "measurements": [
 {{#measurement}}                {
@@ -1466,7 +1472,8 @@ char const* json() noexcept {
                     "contextswitches": {{contextswitches}},
                     "instructions": {{instructions}},
                     "branchinstructions": {{branchinstructions}},
-                    "branchmisses": {{branchmisses}}
+                    "branchmisses": {{branchmisses}},
+                    "cachemissrate": {{cachemissrate}}
                 }{{^-last}},{{/-last}}
 {{/measurement}}            ]
         }{{^-last}},{{/-last}}
@@ -2317,6 +2324,10 @@ struct IterationLogic::Impl {
                     columns.emplace_back(10, 1, "miss%", "%", p);
                 }
             }
+            if (mBench.performanceCounters() && mResult.has(Result::Measure::cachemissrate)) {
+                double const rCacheMissRateMedian = mResult.median(Result::Measure::cachemissrate);
+                columns.emplace_back(15, 2, "cache miss%", "%", rCacheMissRateMedian);
+            }
 
             columns.emplace_back(12, 2, "total", "", mResult.sumProduct(Result::Measure::iterations, Result::Measure::elapsed));
 
@@ -2709,6 +2720,8 @@ PerformanceCounters::PerformanceCounters()
         mPc->monitor(PERF_COUNT_HW_BRANCH_INSTRUCTIONS, LinuxPerformanceCounters::Target(&mVal.branchInstructions, true, false));
     mHas.branchMisses = mPc->monitor(PERF_COUNT_HW_BRANCH_MISSES, LinuxPerformanceCounters::Target(&mVal.branchMisses, true, false));
     // mHas.branchMisses = false;
+    mHas.cacheMisses = mPc->monitor(PERF_COUNT_HW_CACHE_MISSES, LinuxPerformanceCounters::Target(&mVal.cacheMisses, true, false));
+    mHas.cacheReferences = mPc->monitor(PERF_COUNT_HW_CACHE_REFERENCES, LinuxPerformanceCounters::Target(&mVal.cacheReferences, true, false));
 
     // SW events
     mHas.pageFaults = mPc->monitor(PERF_COUNT_SW_PAGE_FAULTS, LinuxPerformanceCounters::Target(&mVal.pageFaults, true, false));
@@ -2965,6 +2978,16 @@ void Result::add(Clock::duration totalElapsed, uint64_t iters, detail::Performan
             mNameToMeasurements[u(Result::Measure::branchmisses)].push_back(branchMisses / dIters);
         }
     }
+    if (pc.has().cacheMisses && pc.has().cacheReferences) {
+        double cacheMisses = d(pc.val().cacheMisses);
+        double cacheReferences = d(pc.val().cacheReferences);
+        double cacheMissRate = 0.0;
+
+        if (cacheReferences >= 1e-9) {
+            cacheMissRate = cacheMisses / cacheReferences / dIters;
+        }
+        mNameToMeasurements[u(Result::Measure::cachemissrate)].push_back(cacheMissRate);
+    }
 }
 
 Config const& Result::config() const noexcept {
@@ -3109,6 +3132,9 @@ Result::Measure Result::fromString(std::string const& str) {
     }
     if (str == "branchmisses") {
         return Measure::branchmisses;
+    }
+    if (str == "cachemissrate") {
+        return Measure::cachemissrate;
     }
     // not found, return _size
     return Measure::_size;
