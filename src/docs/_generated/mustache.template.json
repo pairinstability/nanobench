@@ -24,6 +24,7 @@
             "median(pagefaults)": {{median(pagefaults)}},
             "median(branchinstructions)": {{median(branchinstructions)}},
             "median(branchmisses)": {{median(branchmisses)}},
+            "median(cachemissrate)": {{median(cachemissrate)}},
             "totalTime": {{sumProduct(iterations, elapsed)}},
             "measurements": [
 {{#measurement}}                {
@@ -34,7 +35,8 @@
                     "contextswitches": {{contextswitches}},
                     "instructions": {{instructions}},
                     "branchinstructions": {{branchinstructions}},
-                    "branchmisses": {{branchmisses}}
+                    "branchmisses": {{branchmisses}},
+                    "cachemissrate": {{cachemissrate}}
                 }{{^-last}},{{/-last}}
 {{/measurement}}            ]
         }{{^-last}},{{/-last}}
